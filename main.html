@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Control Arduino & ESP32</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Poppins', sans-serif; }
+    body { background-color: #f0f2f5; color: #1c1e21; padding: 30px 20px; }
+    .container { max-width: 1000px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 30px; }
+    header h1 { font-size: 26px; color: #1877f2; font-weight: 700; }
+    
+    .dashboard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    @media (max-width: 900px) { .dashboard-grid { grid-template-columns: 1fr; } }
+
+    .card { background: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .card h2 { font-size: 18px; margin-bottom: 16px; color: #333; }
+
+    .sensor-hero { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .temp-badge { font-size: 38px; font-weight: 700; margin: 8px 0; }
+    #temp-lm35 { color: #ff4757; }
+    #temp-lm75 { color: #2ed573; }
+    #temp-esp32 { color: #a55eea; }
+
+    .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .pill-lm35 { background-color: #ffe0e3; color: #ff4757; }
+    .pill-lm75 { background-color: #e3f9ed; color: #2ed573; }
+    .pill-esp32 { background-color: #f3e8ff; color: #a55eea; }
+
+    .btn-group { display: flex; gap: 12px; }
+    button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn-on { background-color: #2ed573; color: white; }
+    .btn-off { background-color: #ff4757; color: white; }
+    .btn-primary { background-color: #1877f2; color: white; }
+
+    .input-group { display: flex; gap: 8px; margin-top: 10px; }
+    input[type="text"] { flex: 1; padding: 12px; border: 1px solid #dddfe2; border-radius: 8px; outline: none; }
+    .full-width { grid-column: 1 / -1; }
+
+    .mode-toggle { margin-top: 15px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .mode-btn { background: #f0f2f5; color: #555; font-size: 12px; padding: 8px 12px; }
+    .mode-btn.active { background: #1877f2; color: white; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>Panel de Control Multi-Nodo</h1>
+      <p>Monitoreo Térmico Triple (LM35, LM75 & ESP32)</p>
+    </header>
+
+    <div class="dashboard-grid">
+      <!-- Card LM35 -->
+      <div class="card">
+        <h2>🌡️ Sensor LM35</h2>
+        <div class="sensor-hero">
+          <span class="status-pill pill-lm35">Analógico (A0)</span>
+          <div class="temp-badge" id="temp-lm35">-- °C</div>
+        </div>
+      </div>
+
+      <!-- Card LM75 -->
+      <div class="card">
+        <h2>🌡️ Sensor LM75</h2>
+        <div class="sensor-hero">
+          <span class="status-pill pill-lm75">I2C (SDA/SCL)</span>
+          <div class="temp-badge" id="temp-lm75">-- °C</div>
+        </div>
+      </div>
+
+      <!-- Card ESP32 -->
+      <div class="card">
+        <h2>📡 Nodo ESP32</h2>
+        <div class="sensor-hero">
+          <span class="status-pill pill-esp32">Wi-Fi / HTTP</span>
+          <div class="temp-badge" id="temp-esp32">-- °C</div>
+        </div>
+      </div>
+
+      <!-- Control LED y LCD -->
+      <div class="card full-width">
+        <h2>💡 Control LED y Pantalla LCD</h2>
+        <div class="btn-group">
+          <button class="btn-on" id="btn-encender">Encender LED</button>
+          <button class="btn-off" id="btn-apagar">Apagar LED</button>
+        </div>
+
+        <h2 style="margin-top: 20px;">🖥️ Mostrar en Pantalla LCD</h2>
+        <div class="input-group">
+          <input type="text" id="mensaje" placeholder="Escribe un mensaje personalizado..." />
+          <button class="btn-primary" id="btn-enviar">Enviar Mensaje</button>
+        </div>
+
+        <div class="mode-toggle">
+          <button class="mode-btn active" id="mode-lm35">Ver LM35</button>
+          <button class="mode-btn" id="mode-lm75">Ver LM75</button>
+          <button class="mode-btn" id="mode-esp32">Ver ESP32</button>
+        </div>
+      </div>
+
+      <!-- Gráfica Combinada -->
+      <div class="card full-width">
+        <h2>📈 Evolución Simultánea de Temperatura</h2>
+        <canvas id="chart-sensores" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    // Eventos LED
+    document.getElementById('btn-encender').onclick = () => socket.emit('encender');
+    document.getElementById('btn-apagar').onclick = () => socket.emit('apagar');
+
+    // Control Pantalla LCD
+    const btnLM35 = document.getElementById('mode-lm35');
+    const btnLM75 = document.getElementById('mode-lm75');
+    const btnESP32 = document.getElementById('mode-esp32');
+
+    function setActiveMode(btn) {
+      [btnLM35, btnLM75, btnESP32].forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+    }
+
+    btnLM35.onclick = () => { socket.emit('modo_lcd', 'LM35'); setActiveMode(btnLM35); };
+    btnLM75.onclick = () => { socket.emit('modo_lcd', 'LM75'); setActiveMode(btnLM75); };
+    btnESP32.onclick = () => { socket.emit('modo_lcd', 'ESP32'); setActiveMode(btnESP32); };
+
+    document.getElementById('btn-enviar').onclick = () => {
+      const input = document.getElementById('mensaje');
+      if (input.value.trim() !== '') {
+        socket.emit('mensaje', input.value);
+        setActiveMode(null);
+        input.value = '';
+      }
+    };
+
+    // Configuración de Chart.js
+    const ctx = document.getElementById('chart-sensores').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'LM35 (°C)',
+            data: [],
+            borderColor: '#ff4757',
+            backgroundColor: 'rgba(255, 71, 87, 0.1)',
+            borderWidth: 2,
+            tension: 0.3
+          },
+          {
+            label: 'LM75 (°C)',
+            data: [],
+            borderColor: '#2ed573',
+            backgroundColor: 'rgba(46, 213, 115, 0.1)',
+            borderWidth: 2,
+            tension: 0.3
+          },
+          {
+            label: 'ESP32 (°C)',
+            data: [],
+            borderColor: '#a55eea',
+            backgroundColor: 'rgba(165, 94, 234, 0.1)',
+            borderWidth: 2,
+            tension: 0.3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        plugins: { legend: { display: true, position: 'top' } },
+        scales: {
+          y: { suggestedMin: 15, suggestedMax: 40, grid: { color: '#f0f0f0' } },
+          x: { display: false }
+        }
+      }
+    });
+
+    // Variables para guardar la última lectura de cada sensor
+    let lastLM35 = null;
+    let lastLM75 = null;
+    let lastESP32 = null;
+
+    socket.on('datos_lm35', (temp) => {
+      lastLM35 = temp;
+      document.getElementById('temp-lm35').innerText = temp.toFixed(1) + ' °C';
+    });
+
+    socket.on('datos_lm75', (temp) => {
+      lastLM75 = temp;
+      document.getElementById('temp-lm75').innerText = temp.toFixed(1) + ' °C';
+    });
+
+    socket.on('datos_esp32', (temp) => {
+      lastESP32 = temp;
+      document.getElementById('temp-esp32').innerText = temp.toFixed(1) + ' °C';
+    });
+
+    // Sincronizador: añade las 3 lecturas al mismo tiempo en la gráfica cada 1 segundo
+    setInterval(() => {
+      if (lastLM35 !== null || lastLM75 !== null || lastESP32 !== null) {
+        const timeLabel = new Date().toLocaleTimeString();
+        chart.data.labels.push(timeLabel);
+
+        chart.data.datasets[0].data.push(lastLM35);
+        chart.data.datasets[1].data.push(lastLM75);
+        chart.data.datasets[2].data.push(lastESP32);
+
+        // Mantener máximo 25 lecturas visibles
+        if (chart.data.labels.length > 25) {
+          chart.data.labels.shift();
+          chart.data.datasets[0].data.shift();
+          chart.data.datasets[1].data.shift();
+          chart.data.datasets[2].data.shift();
+        }
+
+        chart.update();
+      }
+    }, 1000);
+  </script>
+</body>
+</html>
